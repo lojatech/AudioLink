@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AudioLink Pro</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <div class="mode-selector">
+            <button class="mode-btn active" id="btn-tab-tx" onclick="switchMode('tx')">Transmitir</button>
+            <button class="mode-btn" id="btn-tab-rx" onclick="switchMode('rx')">Ouvir</button>
+        </div>
+
+        <div id="panel-tx" class="panel active">
+            <h2>Transmissor</h2>
+            <p>Seu ID Único:</p>
+            <div id="my-id" class="id-display" onclick="copyMyId()">Iniciando...</div>
+            <button class="reset-btn" onclick="initPeer()">🔄 Reiniciar Conexão</button>
+            <button id="main-tx-btn" class="action-btn" onclick="toggleTransmit()">Ligar Microfone</button>
+        </div>
+
+        <div id="panel-rx" class="panel">
+            <h2>Receptor</h2>
+            <div class="input-group">
+                <input type="text" id="remote-id" placeholder="ID do parceiro">
+                <button onclick="pasteId()" class="paste-btn">📋</button>
+            </div>
+            <div class="controls-column">
+                <button id="speaker-btn" class="control-text-btn active" onclick="toggleSpeaker()">Alto Falante: Ligado</button>
+                <button id="mute-rx-btn" class="control-text-btn" onclick="toggleMuteRx()">Silenciar</button>
+            </div>
+            <button id="main-rx-btn" class="action-btn" onclick="toggleListen()">Conectar e Ouvir</button>
+            <canvas id="canvas"></canvas>
+        </div>
+
+        <div class="status-indicator" id="status-ui">
+            <div class="dot"></div>
+            <span id="status-text">Sistema Offline</span>
+        </div>
+        <audio id="audio-player" autoplay playsinline></audio>
+    </div>
+
+    <script>
+        let peer = null;
+        let myStream = null;
+        let currentCall = null;
+        const audioPlayer = document.getElementById('audio-player');
+
+        function generateFixedId() {
+            const fingerprint = [navigator.userAgent.length, window.screen.height, window.screen.width, navigator.language].join('-');
+            return "user-" + btoa(fingerprint).substring(0, 8).toLowerCase();
+        }
+
+        const myStaticId = generateFixedId();
+
+        function initPeer() {
+            if (peer) peer.destroy();
+            
+            peer = new Peer(myStaticId, {
+                debug: 1,
+                config: {'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }]}
+            });
+
+            peer.on('open', id => {
+                document.getElementById('my-id').innerText = id;
+                document.getElementById('status-text').innerText = "Sistema Online";
+            });
+
+            peer.on('error', err => {
+                console.error(err);
+                if (err.type === 'unavailable-id') {
+                    document.getElementById('status-text').innerText = "ID ocupado, tentando liberar...";
+                    setTimeout(initPeer, 2000);
+                } else {
+                    document.getElementById('status-text').innerText = "Erro: " + err.type;
+                }
+            });
+
+            peer.on('call', call => {
+                if (myStream) call.answer(myStream);
+                else call.answer();
+            });
+        }
+
+        function switchMode(mode) {
+            if (myStream || currentCall) {
+                alert("Pare o áudio atual antes de mudar.");
+                return;
+            }
+            document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.getElementById(`btn-tab-${mode}`).classList.add('active');
+            document.getElementById(`panel-${mode}`).classList.add('active');
+        }
+
+        function toggleSpeaker() {
+            const btn = document.getElementById('speaker-btn');
+            btn.classList.toggle('active');
+            audioPlayer.volume = btn.classList.contains('active') ? 1.0 : 0.15;
+            btn.innerText = btn.classList.contains('active') ? "Alto Falante: Ligado" : "Alto Falante: Baixo";
+        }
+
+        function toggleMuteRx() {
+            const btn = document.getElementById('mute-rx-btn');
+            audioPlayer.muted = !audioPlayer.muted;
+            btn.classList.toggle('active');
+            btn.innerText = audioPlayer.muted ? "Ouvindo: Mudo" : "Silenciar";
+        }
+
+        async function toggleTransmit() {
+            const btn = document.getElementById('main-tx-btn');
+            if (!myStream) {
+                try {
+                    myStream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: { echoCancellation: true, noiseSuppression: true } 
+                    });
+                    btn.innerText = "Desligar Microfone";
+                    btn.classList.add('btn-stop');
+                    document.getElementById('status-ui').classList.add('connected');
+                    document.getElementById('status-text').innerText = "Transmitindo";
+                } catch (e) { alert("Permita o microfone!"); }
+            } else {
+                myStream.getTracks().forEach(t => t.stop());
+                myStream = null;
+                btn.innerText = "Ligar Microfone";
+                btn.classList.remove('btn-stop');
+                document.getElementById('status-ui').classList.remove('connected');
+                document.getElementById('status-text').innerText = "Sistema Online";
+            }
+        }
+
+        function toggleListen() {
+            const btn = document.getElementById('main-rx-btn');
+            const rId = document.getElementById('remote-id').value;
+            if (!currentCall && rId) {
+                document.getElementById('status-text').innerText = "Conectando...";
+                currentCall = peer.call(rId, new MediaStream());
+                currentCall.on('stream', stream => {
+                    audioPlayer.srcObject = stream;
+                    visualize(stream);
+                    document.getElementById('status-text').innerText = "Ouvindo...";
+                    document.getElementById('status-ui').classList.add('connected');
+                    btn.innerText = "Parar de Escutar";
+                    btn.classList.add('btn-stop');
+                });
+            } else {
+                stopListeningUI();
+            }
+        }
+
+        function stopListeningUI() {
+            if(currentCall) currentCall.close();
+            currentCall = null;
+            audioPlayer.srcObject = null;
+            document.getElementById('main-rx-btn').innerText = "Conectar e Ouvir";
+            document.getElementById('main-rx-btn').classList.remove('btn-stop');
+            document.getElementById('status-ui').classList.remove('connected');
+            document.getElementById('status-text').innerText = "Sistema Online";
+        }
+
+        function visualize(stream) {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const src = ctx.createMediaStreamSource(stream);
+            const ans = ctx.createAnalyser();
+            ans.fftSize = 256;
+            src.connect(ans);
+            const can = document.getElementById('canvas');
+            const c = can.getContext('2d');
+            const dat = new Uint8Array(ans.frequencyBinCount);
+            function draw() {
+                if(!currentCall) return;
+                requestAnimationFrame(draw);
+                ans.getByteFrequencyData(dat);
+                c.fillStyle = '#0a0f1e'; c.fillRect(0,0,can.width,can.height);
+                dat.forEach((v, i) => {
+                    c.fillStyle = '#38bdf8';
+                    c.fillRect(i*4, can.height - v/3.5, 3, v/3.5);
+                });
+            }
+            draw();
+        }
+
+        function copyMyId() {
+            const id = document.getElementById('my-id').innerText;
+            navigator.clipboard.writeText(id).then(() => alert("Copiado!"));
+        }
+
+        async function pasteId() {
+            const text = await navigator.clipboard.readText();
+            document.getElementById('remote-id').value = text;
+        }
+
+        initPeer();
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('./sw.js');
+        }
+    </script>
+</body>
+</html>

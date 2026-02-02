@@ -1,0 +1,15 @@
+{
+  "name": "AudioLink Pro",
+  "short_name": "AudioLink",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0a0f1e",
+  "theme_color": "#38bdf8",
+  "icons": [
+    {
+      "src": "./icone.png?v=2",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
